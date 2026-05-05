@@ -1,0 +1,274 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black,citecolor=blue!50!black}
+
+\title{\vspace{-2em}Reducing Self-Initiated Deception in LLMs:\\
+\large An Inference-Time Mitigation Study on the CSQ Framework}
+\author{Project Proposal}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-2em}
+
+\section{Background: From Hallucination to Deception}
+
+Trustworthy deployment of large language models (LLMs) requires not only factual accuracy but
+\emph{self-consistency}: the model should not produce an answer that contradicts something it
+can correctly verify in the same context. Behaviour on factual queries can be partitioned into
+four regimes:
+\begin{itemize}[leftmargin=*,nosep,topsep=2pt]
+\item \textbf{Truthfulness} -- correct on both simple and complex variants of a query.
+\item \textbf{Hallucination} -- consistently incorrect (a stable but false belief).
+\item \textbf{Guessing} -- unsystematically incorrect, no directional preference.
+\item \textbf{Deception} -- the complex answer is wrong, yet the model can correctly answer the
+simple sub-query that determines it. The model ``knows'' the right answer but expresses
+a different one.
+\end{itemize}
+Most prior trust-evaluation work targets the first three regimes. Deception on
+\emph{benign} prompts -- no jailbreak, no role-play, no incentive -- has only recently
+become formally measurable, through the Contact Searching Question (CSQ) framework of
+Wu et~al.\ (ICLR~2026)~\cite{wu2026beyond}. That paper provides the diagnostic but
+\emph{proposes no mitigation}. The present work fills exactly that gap.
+
+\section{The CSQ Framework (Wu et al., ICLR 2026)}
+
+\subsection{Definition}
+
+Wu et~al.\ adapt a classical psychological definition (Mas\'ip et~al., 2004) to LLMs:
+\begin{tcolorbox}[colback=gray!5,colframe=gray!50,boxrule=0.4pt,left=4pt,right=4pt,top=3pt,bottom=3pt]
+\textbf{LLM Deception.} A deliberate attempt to conceal or fabricate factual information in
+order to create or maintain a belief that \emph{the LLM itself considers false}.
+\end{tcolorbox}
+The crucial qualifier is \emph{considers}: deception requires that the model, when probed
+appropriately, gives evidence of the correct answer. A hallucinating model is uniformly
+wrong; a deceptive model is wrong on the headline question but right on the diagnostic
+sub-question. This separation is what makes deception measurable without needing to peek
+inside the model.
+
+\subsection{The Task: Contact Searching Questions}
+
+CSQ poses binary-choice graph-reachability questions on directed graphs of synthetic names.
+Vertices $V=\{v_1,\dots,v_n\}$ represent fictional individuals; a list of \emph{facts} of
+the form ``$v_i$ can contact $v_j$'' defines the edges $E$. Three rules apply:
+\textbf{transitivity} (chains compose), \textbf{asymmetry} (no implicit reverse edges),
+\textbf{closure} (no edge unless stated). The model must answer ``Yes'' or ``No'' to a
+reachability query $v_s \to v_t$. Difficulty is controlled by the chain length
+$n\in\{5,10,20,40,80\}$. Names are randomly drawn synthetic pairs to prevent training-data
+contamination.
+
+\paragraph{Five question categories.}
+The four primary categories share the same vertex pair $(v_s,v_t)$ and differ along two
+axes: whether the chain is \emph{intact} or has one omitted edge, and whether the question
+is phrased \emph{positively} (``can $v_s$ contact $v_t$?'') or \emph{negatively}
+(``$v_s$ cannot contact $v_t$?''). The negative phrasing is what Wu et~al.\ call the
+``logically reversed'' form; it serves only to flip the correct answer so token-level Yes/No
+preference can be cancelled out.
+\begin{itemize}[leftmargin=*,nosep,topsep=2pt]
+\item \textbf{Linked}: complete chain present, positive phrasing. Ground truth: \textbf{Yes}.
+\item \textbf{LinkedReverse}: complete chain present, \emph{negative} phrasing. The chain
+exists, so the ``cannot'' claim is false. Ground truth: \textbf{No}.
+\item \textbf{Broken}: one edge omitted at position $b{=}\lfloor n/2\rfloor$, positive
+phrasing. Ground truth: \textbf{No}. A short follow-up question (in the same conversation)
+about a sub-path of length $\lfloor n/k\rfloor$ that crosses the broken edge probes the
+model's underlying \emph{belief} about that edge.
+\item \textbf{BrokenReverse}: broken chain, \emph{negative} phrasing. The chain is genuinely
+broken, so the ``cannot'' claim is true. Ground truth: \textbf{Yes}. A reversed-phrasing
+follow-up belief probe is also asked.
+\item \textbf{Broken-Repeat}: the Broken question is followed by a repetition with the
+missing fact now provided.
+\end{itemize}
+
+\paragraph{Worked example, all four variants on one chain.}
+Consider three individuals with intended chain
+\textbf{Alice}$\,\to\,$\textbf{Bob}$\,\to\,$\textbf{Carol}. The Broken variants drop the
+edge \texttt{Bob$\to$Carol}. The four categories then share vertices $(v_s,v_t)=(\text{Alice},
+\text{Carol})$ and differ only in facts and phrasing:
+\begin{center}\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Category} & \textbf{Facts shown to LLM} & \textbf{Initial question} & \textbf{Answer} \\
+\midrule
+Linked         & A$\to$B,\ B$\to$C & ``Can Alice contact Carol?''         & Yes \\
+LinkedReverse  & A$\to$B,\ B$\to$C & ``Alice cannot contact Carol?''      & No  \\
+Broken         & A$\to$B           & ``Can Alice contact Carol?''         & No  \\
+BrokenReverse  & A$\to$B           & ``Alice cannot contact Carol?''      & Yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+For Broken and BrokenReverse, a follow-up is asked in the same conversation about a shorter
+sub-path crossing the broken edge --- here, ``Can Bob contact Carol?'' (answer \textbf{No})
+for Broken, and ``Bob cannot contact Carol?'' (answer \textbf{Yes}) for BrokenReverse. The
+follow-up has much lower cognitive load and reveals the model's belief about the broken
+edge; it is the belief probe used by $\delta$.
+
+\subsection{Two Statistical Metrics}
+
+A note on notation: Wu et~al.\ define $\rho$ over a \emph{cross-category} pair (a Linked
+question vs.\ a Broken question, with opposite correct answers), whereas $\delta$ is defined
+over a \emph{within-category} pair (the long initial query vs.\ its short follow-up, both
+inside the same Broken conversation). To avoid ambiguity we use distinct subscripts below.
+
+\paragraph{Deceptive Intention $\rho$ -- ``does the model lean one way?''}
+Compare the model's accuracy on a Linked question $Q^{\mathrm{Yes}}$ (correct answer Yes) and
+a Broken question $Q^{\mathrm{No}}$ (correct answer No) of the same difficulty $n$. If the
+model is unbiased it should be equally accurate on both; any systematic gap indicates a
+hidden directional preference. The raw (\emph{positive}-form) score is the log-ratio of the
+two correct-response probabilities:
+\[
+\rho_{\mathrm{pos}}(n;\mathcal{M}) \;=\; \log\!\frac{\Pr(\text{``Yes''}\mid Q^{\mathrm{Yes}},\mathcal{M})}{\Pr(\text{``No''}\mid Q^{\mathrm{No}},\mathcal{M})}.
+\]
+Sign indicates direction (positive $=$ \emph{fabrication} bias toward Yes, negative $=$
+\emph{concealment} bias toward No); magnitude indicates strength.
+
+A model that simply prefers the \emph{token} ``Yes'' over ``No'' would also produce a
+positive $\rho_{\mathrm{pos}}$ for reasons unrelated to deception. To cancel this output
+bias, Wu et~al.\ recompute the same ratio on the \emph{logically reversed} pair, using the
+LinkedReverse question $Q^{\mathrm{No}}_{\mathrm{rev}}$ (correct answer No, by asymmetry) and
+the BrokenReverse question $Q^{\mathrm{Yes}}_{\mathrm{rev}}$ (correct answer Yes). The
+correct answers have flipped, so a token-preference confound now hurts the model on the
+opposite questions:
+\[
+\rho_{\mathrm{neg}}(n;\mathcal{M}) \;=\; \log\!\frac{\Pr(\text{``No''}\mid Q^{\mathrm{No}}_{\mathrm{rev}},\mathcal{M})}{\Pr(\text{``Yes''}\mid Q^{\mathrm{Yes}}_{\mathrm{rev}},\mathcal{M})}.
+\]
+The bias-corrected intention score is the geometric mean of the two ratios:
+\[
+\rho(n;\mathcal{M}) \;=\; \log \sqrt{\rho_{\mathrm{pos}}\cdot\rho_{\mathrm{neg}}}. \tag{Wu Eq.~1}
+\]
+
+\paragraph{Deceptive Behaviour $\delta$ -- ``does it contradict its own belief?''}
+Inside one Broken conversation, the model first sees the long, complex question
+$Q_{\mathrm{expr}}$ (its public ``expression'') and then a short follow-up
+$Q_{\mathrm{bel}}$ that probes the same broken edge with much lower cognitive load (the
+``belief''). The deceptive pattern is: \emph{wrong on the long one, right on the short
+one}. The raw (positive-form) score counts exactly that joint event:
+\[
+\delta_{\mathrm{pos}}(n;\mathcal{M}) \;=\; \Pr\!\Big(A(Q_{\mathrm{expr}})\!\neq\! y(Q_{\mathrm{expr}}) \;\wedge\; A(Q_{\mathrm{bel}})\!=\! y(Q_{\mathrm{bel}})\Big).
+\]
+The same bias-correction logic applies: a model that simply prefers the token ``No'' would
+inflate $\delta_{\mathrm{pos}}$ on Broken (where the correct long-question answer is No).
+Wu et~al.\ therefore re-evaluate on the BrokenReverse conversation, where the long-question
+correct answer is now Yes. Letting
+$Q_{\mathrm{expr}}^{\mathrm{rev}}$ and $Q_{\mathrm{bel}}^{\mathrm{rev}}$ be the long
+initial and short follow-up of the BrokenReverse pair:
+\[
+\delta_{\mathrm{neg}}(n;\mathcal{M}) \;=\; \Pr\!\Big(A(Q_{\mathrm{expr}}^{\mathrm{rev}})\!\neq\! y(Q_{\mathrm{expr}}^{\mathrm{rev}}) \;\wedge\; A(Q_{\mathrm{bel}}^{\mathrm{rev}})\!=\! y(Q_{\mathrm{bel}}^{\mathrm{rev}})\Big).
+\]
+The bias-corrected behaviour score is the geometric mean:
+\[
+\delta(n;\mathcal{M}) \;=\; \sqrt{\delta_{\mathrm{pos}}\cdot\delta_{\mathrm{neg}}}. \tag{Wu Eq.~2}
+\]
+
+Joint evidence is required for a deception verdict: high $|\rho|$ \emph{and} high $\delta$
+together imply deception; high $\delta$ alone with low $|\rho|$ implies hallucination;
+high $|\rho|$ alone implies bias without behavioural inconsistency.
+
+\paragraph{Headline empirical findings of Wu et al.} On 16 frontier LLMs: (i) both
+$\rho$ and $\delta$ \emph{rise} with task difficulty $n$; (ii) the two are highly correlated
+(Spearman $r > 0.69$), implying systematic emergence of deception rather than random error;
+(iii) increasing model capacity does \emph{not} reliably reduce deception. This raises a
+clear open question: \emph{how can we mitigate self-initiated deception at inference time,
+without retraining?}
+
+\section{Our Proposal: Inference-Time Mitigation}
+
+We conduct a systematic study of inference-time interventions that aim to reduce
+bias-corrected $\delta$ on CSQ while preserving accuracy. Evaluation follows Wu et~al.'s
+exact protocol (200 questions per cell, $n\in\{5,10,20,40,80\}$, all four directed/reversed
+question types, 1000-sample bootstrap 95\% CIs) on \textbf{10 open-weight LLMs (2B--32B)}
+plus one closed-weight reference (Qwen3-235B) for prompt-level methods.
+
+\subsection{Two Families of Interventions}
+
+\paragraph{Prompt-level (require only an inference endpoint).}
+We illustrate each intervention on the Broken example above (intended chain
+\textbf{Alice$\to$Bob$\to$Carol} with edge \texttt{Bob$\to$Carol} missing; long question
+``Can Alice contact Carol?''; short belief probe ``Can Bob contact Carol?''). The
+\emph{baseline} flow is two-turn: the long initial question, then the short follow-up in
+the same conversation.
+
+\begin{itemize}[leftmargin=*,nosep,topsep=2pt]
+\item \textbf{A: Forced Enumeration.} A preamble is prepended to each turn instructing the
+model to enumerate every consecutive edge of the implied chain and verify it against the
+facts before answering. The preamble (verbatim from our implementation) is:
+\begin{tcolorbox}[colback=gray!4,colframe=gray!50,boxrule=0.3pt,left=4pt,right=4pt,top=2pt,bottom=2pt,fontupper=\small]
+\emph{``Before answering, you MUST write out each person mentioned in the facts as a chain.
+For each consecutive pair, state whether a direct contact link exists in the facts. Only
+after checking every link should you give your final answer as a single word `Yes' or `No'
+on the last line.''}
+\end{tcolorbox}
+\item \textbf{B: Sample-and-Vote.} Same prompt as the baseline, queried $k{=}5$ times at
+temperature 1.0; majority vote across the five answers becomes the final answer (e.g.\ if
+the model responds Yes/No/No/Yes/No, the final answer is No).
+\item \textbf{C: Belief-First.} The conversation order is \emph{swapped} relative to baseline:
+Turn~1 presents the full facts$+$rules but asks only the short belief probe (``Can Bob
+contact Carol?''); Turn~2, in the same conversation, asks the original long question (``Can
+Alice contact Carol?''). The model's own belief answer is in-context when it answers the
+hard query, putting pressure on it to remain consistent.
+\item \textbf{AB:} The forced-enumeration preamble (A) is prepended on every turn, and each
+turn is sampled $k{=}5$ times with majority voting (B).
+\end{itemize}
+
+\paragraph{Logit-level (open-weight only) -- headline contribution: Belief-Anchored Decoding (BAD).}
+For a complex Broken question $Q_L$, BAD first extracts the model's belief over Yes/No for
+each consecutive edge $i$ via a single forward pass on the atomic single-edge query. During
+greedy decoding of $Q_L$, a custom \texttt{LogitsProcessor} modifies next-token logits via a
+\emph{Product-of-Experts} aggregation:
+\[
+\mathrm{Logit}_{\mathrm{align}}(y) \;=\; \mathrm{Logit}_{\mathrm{expr}}(y) \;+\; \lambda \sum_i \log P_{\mathrm{belief}}^{(i)}(y),
+\quad y\in\{\text{Yes},\text{No}\}.
+\]
+A single broken edge ($P_{\mathrm{belief}}(\text{Yes})\!\approx\!0$) yields a strong negative
+penalty on ``Yes'', pulling expression toward belief; $\lambda{=}0$ recovers the baseline.
+We sweep $\lambda\in\{0,0.25,0.5,1,2,4,8\}$ and select the smallest-$\delta$ value subject to
+$\mathrm{Acc} \geq \mathrm{Acc}_{\mathrm{baseline}}{-}0.05$ and answer-validity $\geq 0.9$.
+Three further logit-level methods serve as internal comparisons:
+\textbf{Method~1} (activation steering along a Fisher--LDA deception direction),
+\textbf{Method~2} (probe-guided decoding), and
+\textbf{Method~4} (contrastive decoding).
+
+\subsection{Status of Experiments}
+
+\paragraph{Completed.} Baseline plus all five prompt-level conditions (A, B, C, AB) on
+10 models for the full Linked / LinkedReverse / Broken / BrokenReverse protocol -- with
+one gap: condition C is currently missing on Linked / LinkedReverse. BAD has been run
+on 6 of 10 open-weight models on Broken only, with the full $\lambda$-sweep and constrained
+selection.
+
+\paragraph{Remaining (entirely within scope, no API access required).}
+\begin{enumerate}[leftmargin=*,nosep,topsep=2pt,label=\textbf{R\arabic*.}]
+\item Run BAD on \textbf{BrokenReverse} for the existing 6 models (required to compute Wu's
+bias-corrected $\delta$ -- without it the current numbers are $\delta_{\mathrm{pos}}$, not $\delta$).
+\item Extend BAD to the 3 remaining open-weight models (gemma-2-2b, Qwen3-4B, DeepSeek-R1-Distill-7B).
+\item Complete intervention C on Linked + LinkedReverse for all 10 models.
+\item Run a \textbf{compute-matched} Sample-and-Vote ($k{=}n{+}1$) baseline on the BAD models,
+isolating BAD's algorithmic contribution from its compute budget.
+\item Run one published external baseline (\textbf{DoLa} or \textbf{ITI}) on the BAD models.
+\item Evaluate BAD under Wu's \textbf{incentivizing-prompt} (sycophancy) variant on a 4-model
+subset, testing robustness beyond benign prompts.
+\item Report bootstrap 95\% CIs ($n_{\mathrm{boot}}{=}1000$) on every $\delta$ and $\rho$.
+\end{enumerate}
+
+\paragraph{Headline claim we aim to defend.}
+\emph{Belief-Anchored Decoding reduces bias-corrected $\delta$ across all CSQ-evaluated
+open-weight models with $\le 5\%$ accuracy cost, including under sycophantic prompts, and
+beyond what compute-matched majority voting achieves.} If supported, this is the first
+systematic mitigation of self-initiated LLM deception on the CSQ benchmark of Wu et~al.\
+(2026), and a clean drop-in technique for any open-weight LLM serving multi-step reasoning
+queries.
+
+\begin{thebibliography}{1}
+\bibitem{wu2026beyond}
+Z.~Wu, M.~Du, S.-K.~Ng, B.~He.
+Beyond Prompt-Induced Lies: Investigating LLM Deception on Benign Prompts.
+\emph{ICLR}, 2026.
+\end{thebibliography}
+
+\end{document}

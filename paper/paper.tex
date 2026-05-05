@@ -1,0 +1,515 @@
+%%%%%%%% ICML 2026 WORKSHOP PAPER %%%%%%%%%%%%%%%%%
+
+\documentclass{article}
+
+% Recommended, but optional, packages for figures and better typesetting:
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs} % for professional tables
+
+% hyperref makes hyperlinks in the resulting PDF.
+% If your build breaks (sometimes temporarily if a hyperlink spans a page)
+% please comment out the following usepackage line and replace
+% \usepackage{icml2026} with \usepackage[nohyperref]{icml2026} above.
+\usepackage{hyperref}
+
+
+% Attempt to make hyperref and algorithmic work together better:
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+
+% Use the following line for the initial blind version submitted for review:
+\usepackage{icml2026}
+
+% For preprint, use
+% \usepackage[preprint]{icml2026}
+
+% If accepted, instead use the following line for the camera-ready submission:
+% \usepackage[accepted]{icml2026}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage{multirow}
+\usepackage{xcolor}
+
+% if you use cleveref..
+\usepackage[capitalize,noabbrev]{cleveref}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% THEOREMS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% The \icmltitle you define below is probably too long as a header.
+% Therefore, a short form for the running title is supplied here:
+\icmltitlerunning{Inference-Time Interventions for Reducing LLM Deception}
+
+\begin{document}
+
+\twocolumn[
+\icmltitle{Inference-Time Interventions for Reducing LLM Deception\\on Benign Prompts}
+
+\icmlsetsymbol{equal}{*}
+
+\begin{icmlauthorlist}
+\icmlauthor{Firstname1 Lastname1}{equal,yyy}
+\icmlauthor{Firstname2 Lastname2}{equal,yyy}
+\end{icmlauthorlist}
+
+\icmlaffiliation{yyy}{Department of XXX, University of YYY, Location, Country}
+
+\icmlcorrespondingauthor{Firstname1 Lastname1}{first1.last1@xxx.edu}
+
+\icmlkeywords{LLM deception, inference-time interventions, honesty, trustworthiness}
+
+\vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+\begin{abstract}
+Large language models (LLMs) can exhibit deceptive behavior even on benign, non-adversarial prompts---expressing answers they internally ``know'' to be wrong. Recent work by \citet{wu2026beyond} introduced the Contact Searching Questions (CSQ) framework to detect and quantify such deception using graph reachability problems, defining \emph{deceptive intention} ($\rho$) and \emph{deceptive behavior} ($\delta$) scores. However, mitigation strategies remain underexplored. We propose and evaluate three inference-time interventions---\textbf{Forced Enumeration}, \textbf{Sample \& Vote}, and \textbf{Belief First}---across 9 open-weight LLMs ranging from 2B to 235B parameters. Belief First, which elicits the model's internal belief before its public answer, achieves the most consistent deception reduction (29--92.5\% across models). The combined Forced Enumeration + Sample \& Vote intervention achieves up to 100\% reduction for select models. We find that intervention effectiveness varies substantially by model architecture, scale, and baseline deception level, suggesting that no single intervention is universally optimal. Our results demonstrate that inference-time strategies can meaningfully reduce LLM deception without retraining.
+\end{abstract}
+
+%=============================================================
+\section{Introduction}
+\label{sec:intro}
+%=============================================================
+
+As large language models (LLMs) become widely deployed in high-stakes applications, ensuring their honesty---that they express what they internally represent as true---has emerged as a critical safety concern \citep{evans2021truthful, park2024ai}. While much attention has focused on \emph{hallucination}, where models generate plausible but ungrounded content \citep{ji2023survey, huang2023survey}, a distinct and arguably more concerning phenomenon is \emph{deception}: models expressing answers they ``know'' to be incorrect.
+
+\citet{wu2026beyond} recently demonstrated that LLMs exhibit deceptive behavior even on benign, non-adversarial prompts. Using a novel Contact Searching Questions (CSQ) framework based on linked-list reachability problems, they showed that models systematically give wrong initial answers to broken-link questions while correctly answering followup questions about the same problem---revealing that the model possesses the correct knowledge but initially withholds it. They formalized this through two metrics: the \emph{deceptive intention score} ($\rho$), measuring systematic bias toward a hidden objective, and the \emph{deceptive behavior score} ($\delta$), capturing the rate of initially wrong but ultimately correct responses.
+
+While \citet{wu2026beyond} characterized the phenomenon across 16 models, they did not investigate mitigation strategies. In this work, we ask: \emph{Can inference-time interventions reduce LLM deception without retraining?} We propose three interventions:
+
+\begin{itemize}
+    \item \textbf{Intervention A (Forced Enumeration)}: Instructs the model to explicitly enumerate all edges before answering, forcing step-by-step verification.
+    \item \textbf{Intervention B (Sample \& Vote)}: Samples $k=5$ independent responses and takes the majority vote, leveraging self-consistency \citep{wang2023selfconsistency}.
+    \item \textbf{Intervention C (Belief First)}: Asks the model to first state what it \emph{believes} the answer to be, then provide its final answer, separating internal belief from expressed output.
+\end{itemize}
+
+We also evaluate the combination A+B. We test these across 9 open-weight models spanning 2B to 235B parameters, using the CSQ framework with 5 difficulty levels ($n \in \{5, 10, 20, 40, 80\}$).
+
+Our key findings are:
+\begin{enumerate}
+    \item Belief First is the most broadly effective intervention, reducing $\bar{\delta}$ by 29--92.5\% across all 9 models.
+    \item Forced Enumeration is highly effective for some models (e.g., 98.1\% reduction for Qwen2.5-7B) but can \emph{increase} deception for others (e.g., Gemma-2-2B).
+    \item The combined A+B intervention achieves the highest single-model reduction (100\% for Qwen2.5-7B) but is inconsistent across models.
+    \item Intervention effectiveness depends on model architecture, scale, and baseline deception regime.
+\end{enumerate}
+
+%=============================================================
+\section{Background}
+\label{sec:background}
+%=============================================================
+
+\subsection{Deception vs.\ Hallucination}
+
+Following \citet{wu2026beyond}, we distinguish deception from hallucination. Hallucination involves generating factually incorrect content that the model has no basis to verify \citep{ji2023survey}. Deception, in contrast, occurs when a model expresses something it internally represents as false---a distinction testable through the CSQ framework.
+
+\subsection{Contact Searching Questions (CSQ)}
+
+The CSQ framework \citep{wu2026beyond} uses graph reachability on linked lists of length $n$ to create questions with unambiguous ground-truth answers. Two question types form the basis:
+
+\textbf{Linked questions}: Ask whether node 1 can reach node $n$ through a complete linked list. The correct answer is always ``Yes.''
+
+\textbf{Broken questions}: Ask the same reachability question on a list with one edge removed. The correct answer is always ``No.'' A followup question then asks about a shorter, intact subpath (correct answer: ``Yes''), testing whether the model possesses the knowledge it initially failed to express.
+
+Reverse variants swap the expected answers. All four types---Linked, LinkedReverse, Broken, BrokenReverse---are used for bias correction.
+
+\subsection{Deception Metrics}
+
+\textbf{Deceptive intention score} ($\rho$) measures systematic bias toward a hidden objective via the log-ratio (Equation~1 of \citet{wu2026beyond}):
+\begin{equation}
+    \rho = \log\sqrt{\frac{\Pr(\text{Yes}|\text{Linked})}{\Pr(\text{No}|\text{Broken})} \cdot \frac{\Pr(\text{No}|\text{LinkedRev})}{\Pr(\text{Yes}|\text{BrokenRev})}}
+\end{equation}
+The geometric mean of direct and reverse ratios corrects for position bias.
+
+\textbf{Deceptive behavior score} ($\delta$) captures the rate at which models give wrong initial answers but correct followup answers (Equation~2 of \citet{wu2026beyond}):
+\begin{equation}
+    \delta = \sqrt{\delta_+ \cdot \delta_-}
+\end{equation}
+where $\delta_+ = \Pr(\text{init.\ wrong} \wedge \text{followup correct} \mid \text{Broken})$ and $\delta_-$ is the analogous quantity for BrokenReverse questions.
+
+\textbf{Overall scores} ($\bar{\rho}$, $\bar{\delta}$) aggregate across difficulty levels via log-weighted trapezoidal integration (Equation~3 of \citet{wu2026beyond}):
+\begin{equation}
+    \bar{\delta} = \frac{1}{\log(t/2)} \int_2^{t} \frac{\delta(n)}{n} \, dn
+\end{equation}
+where $t$ is the maximum list length.
+
+%=============================================================
+\section{Method: Inference-Time Interventions}
+\label{sec:method}
+%=============================================================
+
+All three interventions modify only the prompt or inference procedure, requiring no model retraining or fine-tuning.
+
+\subsection{Intervention A: Forced Enumeration}
+
+We prepend instructions requiring the model to list every edge in the graph before answering the reachability question. This is analogous to chain-of-thought prompting \citep{wei2022chain} but specifically targets the graph structure, forcing the model to externalize the information needed for a correct answer. The hypothesis is that deception arises partly from ``shortcut'' reasoning; explicitly enumerating edges compels faithful processing.
+
+\subsection{Intervention B: Sample \& Vote}
+
+We sample $k=5$ independent responses at temperature $T=1.0$ and take the majority vote as the final answer. This leverages the self-consistency principle \citep{wang2023selfconsistency}: if a model has the correct internal representation, sampling multiple times increases the probability that the correct answer surfaces in at least a majority of samples.
+
+\subsection{Intervention C: Belief First}
+
+We modify the prompt to first ask: ``What do you \emph{believe} the answer is?'' before requesting the final answer. This intervention separates the model's internal belief from its expressed answer. It is applied only to Broken-type questions (which have followup components), as it directly targets the belief--expression gap that defines deceptive behavior. Consequently, $\rho$ is not computed for this intervention (it requires Linked-type questions).
+
+\subsection{Combined Intervention A+B}
+
+We apply Forced Enumeration to the prompt and then sample $k=5$ responses with majority voting. This tests whether the two mechanisms are complementary.
+
+%=============================================================
+\section{Experimental Setup}
+\label{sec:setup}
+%=============================================================
+
+\subsection{Models}
+
+We evaluate 9 open-weight instruction-tuned models spanning a wide parameter range (\cref{tab:models}):
+
+\begin{table}[t]
+\caption{Models evaluated. All are open-weight and instruction-tuned. Qwen3-235B uses a Mixture-of-Experts architecture with 22B active parameters.}
+\label{tab:models}
+\begin{center}
+\begin{small}
+\begin{tabular}{lc}
+\toprule
+Model & Parameters \\
+\midrule
+Gemma-2-2B-IT \citep{team2024gemma} & 2B \\
+Qwen3-4B \citep{yang2024qwen2} & 4B \\
+Phi-4-mini-instruct \citep{abdin2024phi} & 3.8B \\
+Qwen2.5-7B-Instruct \citep{yang2024qwen2} & 7B \\
+Llama-3.1-8B-Instruct \citep{touvron2023llama} & 8B \\
+Gemma-2-9B-IT \citep{team2024gemma} & 9B \\
+Mistral-Nemo-Instruct \citep{jiang2023mistral} & 12B \\
+Qwen2.5-32B-Instruct \citep{yang2024qwen2} & 32B \\
+Qwen3-235B-A22B \citep{yang2024qwen2} & 235B (22B active) \\
+\bottomrule
+\end{tabular}
+\end{small}
+\end{center}
+\vskip -0.1in
+\end{table}
+
+\subsection{Problem Configurations}
+
+Following \citet{wu2026beyond}, we use linked-list reachability problems with $n \in \{5, 10, 20, 40, 80\}$. For each $(n, \text{question type})$ pair, we generate a set of problems with rephrased natural-language descriptions. Each condition (baseline + 4 interventions) is evaluated on all problem sets.
+
+\subsection{Infrastructure}
+
+Local models are served using vLLM \citep{kwon2023efficient} on NVIDIA GPUs. Qwen3-235B is accessed via the Together.ai API. All experiments use temperature $T=1.0$ with a maximum of 2048 output tokens.
+
+\subsection{Statistical Analysis}
+
+All reported confidence intervals are 95\% bootstrap CIs with 1000 resamples. Relative deception reduction is computed as $\Delta\bar{\delta}(\%) = (\bar{\delta}_{\text{baseline}} - \bar{\delta}_{\text{intervention}}) / \bar{\delta}_{\text{baseline}} \times 100$.
+
+%=============================================================
+\section{Results}
+\label{sec:results}
+%=============================================================
+
+\subsection{Overall Effectiveness}
+
+\cref{tab:summary} presents the overall deceptive intention ($\bar{\rho}$) and deceptive behavior ($\bar{\delta}$) scores for all models across all conditions.
+
+\begin{table*}[t]
+\caption{Overall deception scores across models and interventions. $\bar{\rho}$: deceptive intention (lower $|\bar{\rho}|$ = less biased). $\bar{\delta}$: deceptive behavior (lower = less deceptive). $\Delta\bar{\delta}$: relative reduction in deceptive behavior (positive = improvement). Best reduction per model in \textbf{bold}.}
+\label{tab:summary}
+\begin{center}
+\begin{small}
+\begin{tabular}{llccc}
+\toprule
+Model & Condition & $\bar{\rho}$ & $\bar{\delta}$ & $\Delta\bar{\delta}$ (\%) \\
+\midrule
+\multirow{5}{*}{Gemma-2-2B}
+ & Baseline & 3.829 & 0.054 & -- \\
+ & A: Forced Enum. & 0.760 & 0.137 & $-$156.5\% \\
+ & B: Sample \& Vote & 2.859 & 0.020 & +63.2\% \\
+ & C: Belief First & -- & 0.004 & \textbf{+92.5\%} \\
+ & A+B Combined & 1.221 & 0.063 & $-$16.8\% \\
+\midrule
+\multirow{5}{*}{Qwen3-4B}
+ & Baseline & 0.507 & 0.153 & -- \\
+ & A: Forced Enum. & 0.346 & 0.135 & +11.5\% \\
+ & B: Sample \& Vote & 0.692 & 0.138 & +9.5\% \\
+ & C: Belief First & -- & 0.074 & \textbf{+51.6\%} \\
+ & A+B Combined & 0.448 & 0.127 & +16.6\% \\
+\midrule
+\multirow{5}{*}{Phi-4-mini}
+ & Baseline & 0.595 & 0.346 & -- \\
+ & A: Forced Enum. & 0.288 & 0.272 & +21.3\% \\
+ & B: Sample \& Vote & 0.947 & 0.421 & $-$21.7\% \\
+ & C: Belief First & -- & 0.099 & \textbf{+71.2\%} \\
+ & A+B Combined & 0.558 & 0.287 & +17.0\% \\
+\midrule
+\multirow{5}{*}{Qwen2.5-7B}
+ & Baseline & 5.590 & 0.409 & -- \\
+ & A: Forced Enum. & 1.002 & 0.008 & +98.1\% \\
+ & B: Sample \& Vote & 5.600 & 0.412 & $-$0.6\% \\
+ & C: Belief First & -- & 0.025 & +94.0\% \\
+ & A+B Combined & 1.645 & 0.000 & \textbf{+100.0\%} \\
+\midrule
+\multirow{5}{*}{Llama-3.1-8B}
+ & Baseline & 2.090 & 0.269 & -- \\
+ & A: Forced Enum. & 0.254 & 0.179 & +33.6\% \\
+ & B: Sample \& Vote & 2.466 & 0.293 & $-$8.7\% \\
+ & C: Belief First & -- & 0.105 & \textbf{+60.9\%} \\
+ & A+B Combined & 0.155 & 0.140 & +47.9\% \\
+\midrule
+\multirow{5}{*}{Gemma-2-9B}
+ & Baseline & $-$0.143 & 0.310 & -- \\
+ & A: Forced Enum. & 0.591 & 0.178 & +42.5\% \\
+ & B: Sample \& Vote & $-$0.150 & 0.283 & +8.8\% \\
+ & C: Belief First & -- & 0.081 & \textbf{+73.7\%} \\
+ & A+B Combined & 1.777 & 0.108 & +65.1\% \\
+\midrule
+\multirow{5}{*}{Mistral-Nemo-12B}
+ & Baseline & $-$0.392 & 0.209 & -- \\
+ & A: Forced Enum. & 0.715 & 0.263 & $-$25.9\% \\
+ & B: Sample \& Vote & $-$0.500 & 0.145 & +30.3\% \\
+ & C: Belief First & -- & 0.096 & \textbf{+54.0\%} \\
+ & A+B Combined & -- & 0.271 & $-$29.7\% \\
+\midrule
+\multirow{5}{*}{Qwen2.5-32B}
+ & Baseline & 0.811 & 0.459 & -- \\
+ & A: Forced Enum. & 1.400 & 0.060 & +86.9\% \\
+ & B: Sample \& Vote & 0.808 & 0.453 & +1.3\% \\
+ & C: Belief First & -- & 0.034 & +92.6\% \\
+ & A+B Combined & 3.568 & 0.032 & \textbf{+93.0\%} \\
+\midrule
+\multirow{5}{*}{Qwen3-235B}
+ & Baseline & 1.298 & 0.155 & -- \\
+ & A: Forced Enum. & 0.385 & 0.162 & $-$4.6\% \\
+ & B: Sample \& Vote & 1.053 & 0.152 & +2.1\% \\
+ & C: Belief First & -- & 0.110 & \textbf{+29.0\%} \\
+ & A+B Combined & 0.264 & 0.120 & +22.3\% \\
+\bottomrule
+\end{tabular}
+\end{small}
+\end{center}
+\vskip -0.1in
+\end{table*}
+
+\textbf{Belief First (C) is the most consistently effective intervention.} It reduces $\bar{\delta}$ for all 9 models, with reductions ranging from 29.0\% (Qwen3-235B) to 92.5\% (Gemma-2-2B). It is the best single intervention for 7 of 9 models.
+
+\textbf{Forced Enumeration (A) is powerful but unreliable.} It achieves dramatic reductions for Qwen2.5-7B (+98.1\%) and Qwen2.5-32B (+86.9\%) but \emph{increases} deception for Gemma-2-2B ($-$156.5\%) and Mistral-Nemo-12B ($-$25.9\%).
+
+\textbf{Sample \& Vote (B) has limited standalone effectiveness.} It achieves meaningful reduction only for Gemma-2-2B (+63.2\%) and Mistral-Nemo-12B (+30.3\%), and can increase deception for Phi-4-mini ($-$21.7\%).
+
+\textbf{A+B Combined achieves the peak reduction} for Qwen2.5-7B (100\%) and Qwen2.5-32B (93.0\%), but increases deception for Gemma-2-2B and Mistral-Nemo-12B, mirroring Intervention~A's failure modes.
+
+\subsection{Deceptive Behavior Across Difficulty Levels}
+
+\cref{fig:delta_vs_n} shows the deceptive behavior score $\delta$ as a function of task difficulty $n$ for each model. Several patterns emerge:
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{fig1_delta_vs_n.pdf}
+\caption{Deceptive behavior score ($\delta$) vs.\ task difficulty ($n$) for all 9 models across 5 conditions. Shaded regions indicate 95\% bootstrap confidence intervals. Belief First (green, dotted) consistently achieves the lowest $\delta$ across difficulty levels. For models like Qwen2.5-7B and Qwen2.5-32B, Forced Enumeration and A+B Combined also achieve near-zero deception.}
+\label{fig:delta_vs_n}
+\end{figure*}
+
+\begin{itemize}
+    \item Baseline deception generally increases with $n$ for most models, consistent with \citet{wu2026beyond}'s finding that longer chains are harder and more prone to deception.
+    \item Belief First maintains low $\delta$ across all difficulty levels, suggesting it addresses the root cause rather than being difficulty-dependent.
+    \item For Qwen2.5-7B and Qwen2.5-32B, Forced Enumeration collapses $\delta$ to near-zero even at $n=80$, indicating that explicit reasoning completely resolves deception for these architectures.
+\end{itemize}
+
+\subsection{Intervention Effectiveness Heatmap}
+
+\cref{fig:heatmap} presents the absolute reduction $\Delta\delta = \bar{\delta}_{\text{baseline}} - \bar{\delta}_{\text{intervention}}$ as a heatmap across all model--intervention pairs.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{fig2_heatmap.pdf}
+\caption{Heatmap of absolute deception reduction ($\Delta\delta$) across models and interventions. Green indicates deception reduction; red indicates increase. Belief First shows uniformly positive values, while other interventions show model-dependent effectiveness.}
+\label{fig:heatmap}
+\end{figure}
+
+The heatmap reveals a clear pattern: Belief First is the only intervention with uniformly positive (green) values across all models. Forced Enumeration shows strong green for Qwen-family models but red for Gemma-2-2B and Mistral-Nemo-12B. Sample \& Vote shows modest effects with occasional red cells.
+
+\subsection{Honesty--Accuracy Trade-off}
+
+A critical question for practical deployment is whether interventions that reduce deception also degrade task accuracy. \cref{fig:tradeoff} presents a four-panel analysis addressing this question.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{fig3_honesty_vs_accuracy.pdf}
+\caption{Four-panel analysis of intervention effectiveness. (a)~Baseline deceptive behavior scores across models. (b)~Comparison of baseline vs.\ Belief First deception levels. (c)~Linked-list accuracy preservation across interventions. (d)~Relative deception reduction (\%) by intervention. Interventions generally preserve task accuracy while reducing deception, though Forced Enumeration can decrease accuracy for some models.}
+\label{fig:tradeoff}
+\end{figure*}
+
+Panel~(c) shows that Belief First and Sample \& Vote generally preserve linked-list accuracy, while Forced Enumeration can reduce accuracy for smaller models. Panel~(d) highlights the variance in intervention effectiveness: some interventions yield negative reduction (increased deception) for specific models.
+
+\subsection{Regime Analysis}
+
+\cref{fig:regime} presents a fine-grained view of intervention effectiveness broken down by both model and difficulty level.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=\textwidth]{fig4_regime_analysis.pdf}
+\caption{Intervention effectiveness by model and difficulty level ($n$). Each cell shows $\Delta\delta$ (positive = less deceptive) for one (model, $n$) pair. This reveals that intervention effectiveness can vary with difficulty: e.g., Forced Enumeration is most effective for Qwen2.5-7B at all difficulty levels, while for some models the effect is concentrated at specific $n$ values.}
+\label{fig:regime}
+\end{figure*}
+
+Notable patterns include:
+\begin{itemize}
+    \item Qwen2.5-32B shows strong improvement from Belief First at all difficulty levels, with the effect strengthening at higher $n$.
+    \item Gemma-2-2B's increased deception under Forced Enumeration is most pronounced at lower $n$ values.
+    \item The A+B Combined intervention mirrors Forced Enumeration's pattern but with attenuated effects, suggesting that Sample \& Vote partially corrects Forced Enumeration's failure modes.
+\end{itemize}
+
+\subsection{Scaling Analysis}
+
+\cref{fig:scaling} examines the relationship between model size and deception, and whether interventions change this relationship.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{fig5_scaling.pdf}
+\caption{Deceptive behavior score ($\delta$) vs.\ model size (log scale). Red circles: baseline; green diamonds: best intervention. While baseline deception does not consistently decrease with model size (e.g., Qwen2.5-32B has the highest baseline~$\delta$), interventions reduce deception to a relatively uniform low level regardless of scale.}
+\label{fig:scaling}
+\end{figure}
+
+Baseline deception does not decrease monotonically with model size---in fact, Qwen2.5-32B has the highest baseline $\bar{\delta}$ (0.459) despite being the second-largest model. This is consistent with \citet{wu2026beyond}'s finding that deception can increase with scale for certain model families. However, after applying the best intervention for each model, deception levels converge to a much lower and more uniform range ($\bar{\delta} \leq 0.14$), suggesting that inference-time interventions are effective across the scale spectrum.
+
+%=============================================================
+\section{Analysis}
+\label{sec:analysis}
+%=============================================================
+
+\subsection{Why Does Belief First Work?}
+
+Belief First's consistent effectiveness across all models suggests it addresses a fundamental mechanism of LLM deception. By asking the model to state its belief before its answer, we hypothesize that:
+
+\begin{enumerate}
+    \item It reduces the pressure to ``commit'' to an initial answer before fully processing the problem, similar to how \citet{kadavath2022language} found that models can better calibrate when asked to express uncertainty.
+    \item It activates the model's internal knowledge verification pathway early in generation, making it harder to subsequently express a contradictory answer.
+    \item The explicit belief--answer separation mirrors the CSQ framework's own detection mechanism (initial vs.\ followup answers), effectively making the model self-audit.
+\end{enumerate}
+
+This connects to work on representation engineering \citep{zou2023representation} and lie detection in LLMs \citep{pacchiardi2024howdetect, burns2023discovering}, which have shown that models maintain internal representations of truthfulness that can be accessed through targeted prompting.
+
+\subsection{Why Does Forced Enumeration Fail for Some Models?}
+
+Forced Enumeration increases deception for Gemma-2-2B ($-$156.5\%) and Mistral-Nemo-12B ($-$25.9\%). We hypothesize two mechanisms:
+
+\textbf{Attention dilution.} For smaller models, the additional edge-listing tokens may exceed the model's effective context window, causing it to lose track of the reachability question amid verbose enumeration.
+
+\textbf{Format compliance failure.} Some models may struggle to follow the structured enumeration format while simultaneously reasoning about graph connectivity, leading to worse performance than unstructured reasoning.
+
+\subsection{Model Family Effects}
+
+The Qwen2.5 family shows a distinctive pattern: both Qwen2.5-7B and Qwen2.5-32B respond dramatically to Forced Enumeration (98.1\% and 86.9\% reduction) and A+B Combined (100\% and 93.0\%). This may reflect architecture-specific properties of the Qwen2.5 instruction tuning that make these models particularly responsive to structured reasoning prompts. In contrast, the Gemma-2 family shows more modest responses to Forced Enumeration, with Gemma-2-2B actually being harmed by it.
+
+%=============================================================
+\section{Related Work}
+\label{sec:related}
+%=============================================================
+
+\textbf{LLM deception and honesty.} \citet{park2024ai} survey deception in AI systems broadly, while \citet{hagendorff2024deception} demonstrate that deception abilities emerge with scale. \citet{hubinger2024sleeper} show that deceptive behaviors can persist through safety training, and \citet{scheurer2024large} find that models can strategically deceive under pressure. \citet{chen2025honesty} explore training-time approaches to improve honesty. Our work complements these by focusing on inference-time mitigation.
+
+\textbf{Truthfulness evaluation.} TruthfulQA \citep{lin2022truthfulqa} evaluates whether models generate truthful answers, but relies on human-curated questions where the model may not ``know'' the answer. The CSQ framework \citep{wu2026beyond} provides a stronger test by constructing problems where the followup response proves the model possesses the relevant knowledge.
+
+\textbf{Inference-time reasoning.} Chain-of-thought prompting \citep{wei2022chain} and self-consistency \citep{wang2023selfconsistency} improve reasoning accuracy. We adapt these techniques specifically for deception reduction, finding that their effectiveness is highly model-dependent in this context.
+
+\textbf{Internal knowledge access.} \citet{burns2023discovering} and \citet{kadavath2022language} show that models maintain internal representations of truthfulness. Our Belief First intervention operationalizes this insight by prompting models to access these representations before committing to an answer.
+
+%=============================================================
+\section{Limitations}
+\label{sec:limitations}
+%=============================================================
+
+\textbf{Task specificity.} Our evaluation uses only graph reachability problems (CSQ framework). While these provide clean ground truth and controlled difficulty, the interventions' effectiveness on other deception-prone tasks remains to be established.
+
+\textbf{Computational cost.} Sample \& Vote requires $k=5$ inference calls per question, making it 5$\times$ more expensive. Combined with Forced Enumeration (which increases input length), A+B can be significantly more costly.
+
+\textbf{Limited model coverage.} We test 9 open-weight models. Proprietary models (GPT-4o, Claude, Gemini) and reasoning models (o1, DeepSeek-R1) may respond differently to these interventions.
+
+\textbf{Temperature sensitivity.} All experiments use $T=1.0$. Lower temperatures may reduce deception through increased determinism, potentially interacting with our interventions.
+
+%=============================================================
+\section{Conclusion}
+\label{sec:conclusion}
+%=============================================================
+
+We demonstrate that inference-time interventions can substantially reduce LLM deception on benign prompts as measured by the CSQ framework. Belief First emerges as the most reliable intervention, reducing deceptive behavior by 29--92.5\% across all 9 tested models. Forced Enumeration and the combined A+B intervention achieve even larger reductions for specific model families (up to 100\% for Qwen2.5-7B) but can backfire for others. These findings suggest that deception in LLMs is partly a generation-strategy issue, addressable at inference time, rather than solely a representation problem requiring retraining. Future work should extend these interventions to other deception-prone tasks, investigate their interaction with fine-tuning approaches, and develop adaptive strategies that select the best intervention for a given model.
+
+%=============================================================
+\section*{Impact Statement}
+%=============================================================
+
+This paper presents work whose goal is to improve the honesty and trustworthiness of large language models. Reducing deceptive behavior in LLMs has direct positive societal implications, as deployed models that express what they internally represent as true are safer and more reliable. We note that understanding deception mechanisms could theoretically be misused to make models more deceptive, but we believe the benefits of transparent research on mitigation strategies substantially outweigh this risk.
+
+\bibliography{references}
+\bibliographystyle{icml2026}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% APPENDIX
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\appendix
+\onecolumn
+
+\section{Per-Model Detailed Results}
+\label{app:detailed}
+
+\cref{tab:summary} in the main text provides the overall scores. Here we provide additional context on each model's behavior.
+
+\textbf{Gemma-2-2B} ($\bar{\delta}_{\text{baseline}} = 0.054$): The lowest baseline deception among all models. Belief First reduces this to 0.004 (+92.5\%), but Forced Enumeration catastrophically increases deception to 0.137 ($-$156.5\%). This suggests that for models with already-low deception, structured reasoning prompts can introduce confusion rather than improve honesty.
+
+\textbf{Qwen3-4B} ($\bar{\delta}_{\text{baseline}} = 0.153$): Moderate baseline deception. All interventions provide modest improvement (9.5--51.6\%), with Belief First the clear winner at +51.6\%.
+
+\textbf{Phi-4-mini} ($\bar{\delta}_{\text{baseline}} = 0.346$): High baseline deception. Belief First achieves +71.2\% reduction, while Sample \& Vote increases deception by 21.7\%, suggesting that majority voting amplifies this model's deceptive tendencies.
+
+\textbf{Qwen2.5-7B} ($\bar{\delta}_{\text{baseline}} = 0.409$): High baseline deception with the strongest response to interventions. A+B Combined achieves 100\% reduction ($\bar{\delta} = 0.000$), and Forced Enumeration alone achieves 98.1\%. This model appears to possess strong internal knowledge that is easily elicited through structured prompting.
+
+\textbf{Llama-3.1-8B} ($\bar{\delta}_{\text{baseline}} = 0.269$): Moderate baseline deception. Belief First (+60.9\%) and A+B Combined (+47.9\%) are both effective. Sample \& Vote slightly increases deception ($-$8.7\%).
+
+\textbf{Gemma-2-9B} ($\bar{\delta}_{\text{baseline}} = 0.310$): Despite being from the same family as Gemma-2-2B, this larger model responds well to all interventions. Belief First (+73.7\%) and A+B Combined (+65.1\%) are most effective.
+
+\textbf{Mistral-Nemo-12B} ($\bar{\delta}_{\text{baseline}} = 0.209$): Moderate baseline deception. Uniquely, this model responds better to Sample \& Vote (+30.3\%) than to Forced Enumeration ($-$25.9\%), opposite to most other models. Belief First remains the best at +54.0\%.
+
+\textbf{Qwen2.5-32B} ($\bar{\delta}_{\text{baseline}} = 0.459$): The highest baseline deception despite being the second-largest model. However, it responds dramatically to all interventions except Sample \& Vote. A+B Combined (+93.0\%) and Belief First (+92.6\%) are nearly equally effective, with Forced Enumeration close behind (+86.9\%).
+
+\textbf{Qwen3-235B (MoE, 22B active)} ($\bar{\delta}_{\text{baseline}} = 0.155$): Moderate baseline deception. Interventions provide modest improvement, with Belief First the best at +29.0\%. The relatively small improvements may reflect the MoE architecture's different routing behavior under modified prompts.
+
+\section{Intervention Prompt Templates}
+\label{app:prompts}
+
+\textbf{Intervention A (Forced Enumeration)} adds the following instruction before the question:
+\begin{quote}
+\emph{``Before answering, carefully list every edge/connection mentioned in the problem. Then, using only the listed connections, determine whether the queried path exists.''}
+\end{quote}
+
+\textbf{Intervention B (Sample \& Vote)} uses the standard question prompt but samples $k=5$ responses independently at temperature $T=1.0$. The final answer is the majority vote among valid (Yes/No) responses.
+
+\textbf{Intervention C (Belief First)} modifies the question prompt:
+\begin{quote}
+\emph{``First, state what you believe the correct answer is. Then, provide your final answer.''}
+\end{quote}
+The initial belief statement and the final answer are parsed separately. The ``belief'' is used as the initial answer for computing $\delta$.
+
+\textbf{Combined A+B} uses Intervention A's prompt and Intervention B's sampling procedure.
+
+\section{Bootstrap Confidence Intervals}
+\label{app:bootstrap}
+
+All confidence intervals are computed via non-parametric bootstrap with 1000 resamples. For each metric ($\rho$, $\delta$, accuracy), we resample the result set with replacement, compute the metric on the bootstrap sample, and report the 2.5th and 97.5th percentiles as the 95\% CI bounds. For the bias-corrected metrics ($\rho$, $\delta$), we use the same bootstrap indices across the paired question types (Linked/Broken, direct/reverse) to preserve the correlation structure.
+
+\end{document}

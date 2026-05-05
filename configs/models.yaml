@@ -1,0 +1,120 @@
+# Model configurations for the experiment
+# All local models fit on a single RTX 5090 (32GB)
+# Preference: smaller models first, 32B with quantization
+
+models:
+  gemma-2-2b-it:
+    type: local
+    hf_id: "google/gemma-2-2b-it"
+    port: 8005
+    tensor_parallel: 1
+    max_model_len: 8192
+    quantization: null  # ~5GB in bf16, fits easily
+
+  Llama-3.2-3B-Instruct:
+    type: local
+    hf_id: "meta-llama/Llama-3.2-3B-Instruct"
+    port: 8006
+    tensor_parallel: 1
+    max_model_len: 8192
+    quantization: null  # ~6GB in bf16, fits easily
+
+  Qwen3-4B:
+    type: local
+    hf_id: "Qwen/Qwen3-4B"
+    port: 8007
+    tensor_parallel: 1
+    max_model_len: 8192
+    quantization: null
+    reasoning: true
+
+  Qwen2.5-7B-Instruct:
+    type: local
+    hf_id: "Qwen/Qwen2.5-7B-Instruct"
+    port: 8008
+    tensor_parallel: 1
+    max_model_len: 8192
+    quantization: null  # ~15GB in bf16, fits easily
+
+  DeepSeek-R1-Distill-Qwen-7B:
+    type: local
+    hf_id: "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+    port: 8009
+    tensor_parallel: 1
+    max_model_len: 8192
+    quantization: null
+    reasoning: true
+
+  Phi-4-mini-instruct:
+    type: local
+    hf_id: "microsoft/Phi-4-mini-instruct"
+    port: 8010
+    tensor_parallel: 1
+    max_model_len: 8192
+    quantization: null  # ~8GB in bf16, fits easily
+
+  Meta-Llama-3.1-8B-Instruct:
+    type: local
+    hf_id: "meta-llama/Llama-3.1-8B-Instruct"
+    port: 8001
+    tensor_parallel: 1
+    max_model_len: 8192
+    quantization: null  # ~16GB in bf16, fits easily
+
+  gemma-2-9b-it:
+    type: local
+    hf_id: "google/gemma-2-9b-it"
+    port: 8002
+    tensor_parallel: 1
+    max_model_len: 8192
+    quantization: null  # ~18GB in bf16, fits on single 5090
+
+  Mistral-Nemo-Instruct-2407:
+    type: local
+    hf_id: "mistralai/Mistral-Nemo-Instruct-2407"
+    port: 8004
+    tensor_parallel: 1
+    max_model_len: 8192
+    quantization: null  # 12.2B params, ~24GB bf16, fits on single 5090
+
+  Qwen2.5-32B-Instruct:
+    type: local
+    hf_id: "Qwen/Qwen2.5-32B-Instruct-AWQ"
+    port: 8003
+    tensor_parallel: 1
+    max_model_len: 4096
+    quantization: "awq"  # ~18GB with AWQ 4-bit, fits on single 5090
+
+  Llama-3.3-70B-Instruct:
+    type: remote
+    base_url: "https://api.together.xyz/v1"
+    api_key_env: "TOGETHER_API_KEY"
+    model_id: "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+
+  DeepSeek-V3.1:
+    type: remote
+    base_url: "https://api.together.xyz/v1"
+    api_key_env: "TOGETHER_API_KEY"
+    model_id: "deepseek-ai/DeepSeek-V3.1"
+
+  Qwen3-235B-A22B-Instruct:
+    type: remote
+    base_url: "https://api.together.xyz/v1"
+    api_key_env: "TOGETHER_API_KEY"
+    model_id: "Qwen/Qwen3-235B-A22B-Instruct-2507-tput"
+    reasoning: true
+
+# Experiment parameters
+experiment:
+  difficulty_levels: [5, 10, 20, 40, 80]
+  n_questions: 200
+  temperature: 1.0
+  seed: 42
+  k: 2  # followup difficulty ratio
+  n_bootstrap: 1000
+  conditions:
+    - baseline
+    - intervention_a  # forced enumeration
+    - intervention_b  # sample-then-vote (k=5)
+    - intervention_c  # belief before expression
+    - intervention_ab # A + B combined
